@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            margin: 0;
+        }
+
+        text {
+            pointer-events: none;
+        }
+
+        .node:hover {
+            stroke: #999;
+            stroke-opacity: .6;
+            stroke-width: 4px;
+        }
+
+        .link {
+            stroke: #999;
+            stroke-opacity: .6;
+        }
+    </style>
+</head>
+
+<body>
+    <label for="nnet">Name of neural net</label>
+    <input style="width: 400px;" type="text" id="nnet" value="D:/Apps/ml-lab/detect-line/nets/10x10_std">
+    <label for="width">Width</label>
+    <input type="number" id="width" value="800">
+    <label for="height">Height</label>
+    <input type="number" id="height" value="800">
+    <button id="load">Load</button>
+    <svg id="svg" width="800" height="800"></svg>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.5/d3.min.js"></script>
+    <script>
+        var svgEl = document.getElementById('svg');
+        var widthEl = document.getElementById('width');
+        var heightEl = document.getElementById('height');
+        var textEl = document.getElementById('nnet');
+        var loadEl = document.getElementById('load');
+
+        widthEl.addEventListener('input', function() { svgEl.setAttribute('width', this.value) });
+        heightEl.addEventListener('input', function() { svgEl.setAttribute('height', this.value) });
+
+        loadEl.addEventListener('click', function() {
+            while(svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+            initD3(textEl.value);
+        });
+
+        function initD3(name) {
+            var svg = d3.select("svg")
+                nodeSize = 10,
+                width = +svg.attr("width"),
+                height = +svg.attr("height");
+
+            var color = d3.scale.category20();
+
+            d3.json("http://localhost:1234/api?name=" + name + ".json", function (error, graph) {
+                if (error) return alert(error);
+                
+                var nodes = graph.neurons;
+
+                // get network size
+                var netsize = {};
+                var hiddenLayerLen = 0;
+                nodes.forEach(function (d) {
+                    if (typeof d.layer === 'number' && d.layer + 1 > hiddenLayerLen)
+                        hiddenLayerLen = d.layer + 1;
+                });
+                nodes.forEach(function (d) {
+                    if (typeof d.layer === 'number')
+                        d.layer += 2
+                    else
+                        d.layer = d.layer === 'input' ? 1 : hiddenLayerLen + 2;
+                });
+                var minBias = 0;
+                var maxBias = 0;
+
+                nodes.forEach(function (d) {
+                    if (d.layer === 1) return;
+                    if (d.bias < minBias) minBias = d.bias;
+                    if (d.bias > maxBias) maxBias = d.bias;
+                });
+
+                window.nodeCol = function nodeCol(d) {
+                    if (d.layer === 1) return 'rgb(31, 119, 180)';
+                    return d3.hsl((d.bias - minBias) / (maxBias - minBias) * 120, 1, .5).toString();
+                }
+
+                console.log(nodes);
+
+                nodes.forEach(function (d) {
+                    if (d.layer in netsize) {
+                        netsize[d.layer] += 1;
+                    } else {
+                        netsize[d.layer] = 1;
+                    }
+                    d["lidx"] = netsize[d.layer];
+                });
+
+                // calc distances between nodes
+                var largestLayerSize = Math.max.apply(
+                    null, Object.keys(netsize).map(function (i) { return netsize[i]; }));
+
+                var xdist = width / Object.keys(netsize).length,
+                    ydist = height / largestLayerSize;
+
+                // create node locations
+                nodes.map(function (d) {
+                    d["x"] = (d.layer - 0.5) * xdist;
+                    // d["y"] = height / 2 - netsize[d.layer] * .5 * ydist + d.lidx * ydist;
+                    d["y"] = (d.lidx - .5) * ydist
+                });
+
+                var links = graph.connections;
+                links.forEach(function (d) {
+                    d.source = d.from;
+                    delete d.from;
+                    d.target = d.to;
+                    delete d.to;
+                });
+
+                var minWeight = {};
+                var maxWeight = {};
+
+                for (let i = 1; i < hiddenLayerLen + 2; i++) {
+                    minWeight[i] = maxWeight[i] = 0;
+                }
+
+                links.forEach(function (d) {
+                    if (d.weight < minWeight[nodes[d.source].layer]) minWeight[nodes[d.source].layer] = d.weight;
+                    if (d.weight > maxWeight[nodes[d.source].layer]) maxWeight[nodes[d.source].layer] = d.weight;
+                });
+                console.log(minWeight, maxWeight)
+
+                window.linkCol = function nodeCol(d) {
+                    console.log((d.weight - minWeight[nodes[d.source].layer]) / (maxWeight[nodes[d.source].layer] - minWeight[d.layer]) * 220);
+                    return d3.hsl((d.weight - minWeight[nodes[d.source].layer]) / (maxWeight[nodes[d.source].layer] - minWeight[nodes[d.source].layer]) * 220, 1, .5).toString();
+                }
+
+                // draw links
+                var link = svg.selectAll(".link")
+                    .data(links)
+                    .enter().append("line")
+                    .attr("class", "link")
+                    .attr("x1", function (d) { return nodes[d.source].x + nodeSize; })
+                    .attr("y1", function (d) { return nodes[d.source].y; })
+                    .attr("x2", function (d) { return nodes[d.target].x - nodeSize; })
+                    .attr("y2", function (d) { return nodes[d.target].y; })
+                    .style("stroke", linkCol)
+                    .style("stroke-width", function (d) { return Math.sqrt(d.value); });
+
+                // draw nodes
+                var node = svg.selectAll(".node")
+                    .data(nodes)
+                    .enter().append("g")
+                    .attr("transform", function (d) {
+                        return "translate(" + d.x + "," + d.y + ")";
+                    });
+
+                var circle = node.append("circle")
+                    .attr("class", "node")
+                    .attr("r", nodeSize)
+                    .style("fill", nodeCol);
+
+                node.append("text")
+                    .attr("dx", "-.35em")
+                    .attr("dy", ".35em")
+                    .text(function (d) { return d.label; });
+            });
+        }
+    </script>
+</body>
+
+</html>

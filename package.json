@@ -1,0 +1,5 @@
+{
+  "name": "synaptic-visualizer",
+  "license": "MIT",
+  "main": "server.js"
+}
